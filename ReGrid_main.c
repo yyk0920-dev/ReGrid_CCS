@@ -144,10 +144,13 @@ void sendReGridData(uint16_t voltage_x100, uint16_t current_x100, uint16_t fault
 {
     SCI_sendString("V=");
     SCI_sendUint(voltage_x100);
+
     SCI_sendString(",I=");
     SCI_sendUint(current_x100);
+
     SCI_sendString(",FAULT=");
-    SCI_sendFaultString(fault);
+    SCI_sendUint(fault);   // 문자열이 아니라 숫자로 전송
+
     SCI_sendString("\r\n");
 }
 
