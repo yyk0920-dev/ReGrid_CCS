@@ -102,29 +102,39 @@ void initADC(void)
 // ==================================================
 void readSensors(uint16_t *v_x100, uint16_t *i_x100)
 {
-    // SW 트리거로 변환 시작
     ADC_forceSOC(ADCC_BASE, ADC_SOC_NUMBER0);
     ADC_forceSOC(ADCC_BASE, ADC_SOC_NUMBER1);
 
-    // SOC1 변환이 끝날 때까지 대기
     while(ADC_getInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1) == false);
     ADC_clearInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1);
 
-    // 결과값 읽기
     adcResultCurrent = ADC_readResult(ADCCRESULT_BASE, ADC_SOC_NUMBER0);
     adcResultVoltage = ADC_readResult(ADCCRESULT_BASE, ADC_SOC_NUMBER1);
 
-    // --- 물리량 변환 ---
-    
-    // 1. 전압 변환 (x100 포맷)
-    // 배율 5.0을 포함해야 실제 전압(5V 등)이 나옵니다.
-    float f_volt = ((float)adcResultVoltage * 3.3f / 4095.0f) * 5.0f;
-    *v_x100 = (uint16_t)(f_volt * 100.0f);
+    // 1. ADC 입력 전압 계산 (0 ~ 3.3V)
+    float adcVoltVoltage = ((float)adcResultVoltage * 3.3f) / 4095.0f;
+    float adcVoltCurrent = ((float)adcResultCurrent * 3.3f) / 4095.0f;
 
-    // 2. 전류 변환 (x100 포맷)
-    // ACS712 센서 기준: (출력전압 - 1.65V) / 0.066
-    float f_curr = (((float)adcResultCurrent * 3.3f / 4095.0f) - 1.65f) / 0.066f;
-    if(f_curr < 0) f_curr = 0; 
+    // 2. 전압 센서 보정 (11.2V 입력 시 16.5V가 나오던 문제 해결)
+    // 실제 입력 11.2V일 때 ADC 측정 전압(adcVoltVoltage)을 기준으로 비율을 다시 잡습니다.
+    // 만약 11.2V일 때 ADC에 3.3V가 꽉 차 있다면 보정계수는 11.2/3.3 = 3.394가 맞습니다.
+    float f_volt = adcVoltVoltage * 3.394f; 
+
+    // 3. 전류 센서 보정 (ACS712 30A 모델 기준)
+    // [중요] 0A일 때 실제 ADC 전압이 몇 V인지 확인이 필요합니다. 
+    // 만약 전압 분배 저항을 안 썼다면 2.5V, 썼다면 약 1.65V가 찍혀야 합니다.
+    float CURRENT_ZERO_VOLTAGE = 1.65f; // 일단 1.65V로 두되, 값이 튀면 2.5f로 바꿔보세요.
+    float CURRENT_SENSITIVITY = 0.066f; // 30A 모델: 66mV/A
+
+    float f_curr = (adcVoltCurrent - CURRENT_ZERO_VOLTAGE) / CURRENT_SENSITIVITY;
+
+    // 4. 노이즈 제거 (Dead-zone 처리)
+    // 0.2A 미만의 미세 전류는 0으로 간주 (데이터 안정화)
+    if(f_curr < 0.20f && f_curr > -0.20f) f_curr = 0.0f;
+    if(f_curr < 0.0f) f_curr = 0.0f; 
+
+    // 5. 최종 값 전달 (x100 포맷)
+    *v_x100 = (uint16_t)(f_volt * 100.0f);
     *i_x100 = (uint16_t)(f_curr * 100.0f);
 }
 
