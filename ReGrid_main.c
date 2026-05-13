@@ -1,0 +1,170 @@
+#include "driverlib.h"
+#include "device.h"
+#include "board.h"
+#include <stdio.h>
+
+// ==================================================
+// Fault Code & Thresholds
+// ==================================================
+#define FAULT_NORMAL          0
+#define FAULT_UNDERVOLTAGE    1
+#define FAULT_OVERLOAD        2
+#define FAULT_DISCONNECT      3
+#define FAULT_OVERVOLTAGE     4
+
+#define VOLTAGE_MIN_X100        1050    // 10.50V
+#define VOLTAGE_MAX_X100        1380    // 13.80V
+#define CURRENT_THRESHOLD_X100  500     // 5.00A
+#define CURRENT_MIN_X100        5       // 0.05A
+
+// ==================================================
+// Global Variables
+// ==================================================
+uint16_t adcResultCurrent; // 물리적 28번 (ADCINC0)
+uint16_t adcResultVoltage; // 물리적 66번 (ADCINC1)
+
+// ==================================================
+// Function Prototypes
+// ==================================================
+void initADC(void);
+void readSensors(uint16_t *v_x100, uint16_t *i_x100);
+uint16_t classifyFault(uint16_t voltage_x100, uint16_t current_x100);
+void sendReGridData(uint16_t voltage_x100, uint16_t current_x100, uint16_t fault);
+void SCI_sendString(const char *str);
+void SCI_sendUint(uint16_t value);
+
+// ==================================================
+// Main
+// ==================================================
+void main(void)
+{
+    uint16_t voltage_x100 = 0;
+    uint16_t current_x100 = 0;
+    uint16_t fault = FAULT_NORMAL;
+
+    Device_init();
+    Device_initGPIO();
+    Interrupt_initModule();
+    Interrupt_initVectorTable();
+
+    Board_init(); // SysConfig에서 설정한 SCI 초기화 등
+    initADC();    // ADC 모듈 상세 설정
+
+    EINT;
+    ERTM;
+
+    while(1)
+    {
+        // 1. 센서 값 읽기 및 물리량 변환
+        readSensors(&voltage_x100, &current_x100);
+
+        // 2. 상태 분류 (임계값 체크)
+        fault = classifyFault(voltage_x100, current_x100);
+
+        // 3. 라즈베리파이로 송신
+        sendReGridData(voltage_x100, current_x100, fault);
+
+        // 1초 대기
+        DEVICE_DELAY_US(1000000);
+    }
+}
+
+// ==================================================
+// ADC Initialization (물리적 28:INC0, 66:INC1)
+// ==================================================
+void initADC(void)
+{
+    // ADCC 모듈 클럭 설정
+    ADC_setPrescaler(ADCC_BASE, ADC_CLK_DIV_4_0);
+
+    // ADC 컨버터 전원 켜기 (매우 중요!)
+    ADC_enableConverter(ADCC_BASE);
+    DEVICE_DELAY_US(1000); // 전원 안정화 대기
+
+    // 변환 완료 시점 설정
+    ADC_setInterruptPulseMode(ADCC_BASE, ADC_PULSE_END_OF_CONV);
+
+    // SOC0 설정: 물리적 28번(ADCINC0), 전류 센서
+    ADC_setupSOC(ADCC_BASE, ADC_SOC_NUMBER0, ADC_TRIGGER_SW_ONLY, ADC_CH_ADCIN0, 15);
+
+    // SOC1 설정: 물리적 66번(ADCINC1), 전압 센서
+    ADC_setupSOC(ADCC_BASE, ADC_SOC_NUMBER1, ADC_TRIGGER_SW_ONLY, ADC_CH_ADCIN1, 15);
+
+    // SOC1 변환 완료 시 인터럽트 플래그(ADCINT1) 발생 설정
+    ADC_setInterruptSource(ADCC_BASE, ADC_INT_NUMBER1, ADC_SOC_NUMBER1);
+    ADC_enableInterrupt(ADCC_BASE, ADC_INT_NUMBER1);
+    ADC_clearInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1);
+}
+
+// ==================================================
+// Read Sensors & Physical Value Conversion
+// ==================================================
+void readSensors(uint16_t *v_x100, uint16_t *i_x100)
+{
+    // SW 트리거로 변환 시작
+    ADC_forceSOC(ADCC_BASE, ADC_SOC_NUMBER0);
+    ADC_forceSOC(ADCC_BASE, ADC_SOC_NUMBER1);
+
+    // SOC1 변환이 끝날 때까지 대기
+    while(ADC_getInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1) == false);
+    ADC_clearInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1);
+
+    // 결과값 읽기
+    adcResultCurrent = ADC_readResult(ADCCRESULT_BASE, ADC_SOC_NUMBER0);
+    adcResultVoltage = ADC_readResult(ADCCRESULT_BASE, ADC_SOC_NUMBER1);
+
+    // --- 물리량 변환 ---
+    
+    // 1. 전압 변환 (x100 포맷)
+    // 배율 5.0을 포함해야 실제 전압(5V 등)이 나옵니다.
+    float f_volt = ((float)adcResultVoltage * 3.3f / 4095.0f) * 5.0f;
+    *v_x100 = (uint16_t)(f_volt * 100.0f);
+
+    // 2. 전류 변환 (x100 포맷)
+    // ACS712 센서 기준: (출력전압 - 1.65V) / 0.066
+    float f_curr = (((float)adcResultCurrent * 3.3f / 4095.0f) - 1.65f) / 0.066f;
+    if(f_curr < 0) f_curr = 0; 
+    *i_x100 = (uint16_t)(f_curr * 100.0f);
+}
+
+// ==================================================
+// Fault Classification & Communication (기존 동일)
+// ==================================================
+uint16_t classifyFault(uint16_t voltage_x100, uint16_t current_x100)
+{
+    if(current_x100 > CURRENT_THRESHOLD_X100) return FAULT_OVERLOAD;
+    if(current_x100 < CURRENT_MIN_X100)       return FAULT_DISCONNECT;
+    if(voltage_x100 < VOLTAGE_MIN_X100)       return FAULT_UNDERVOLTAGE;
+    if(voltage_x100 > VOLTAGE_MAX_X100)       return FAULT_OVERVOLTAGE;
+    return FAULT_NORMAL;
+}
+
+void sendReGridData(uint16_t voltage_x100, uint16_t current_x100, uint16_t fault)
+{
+    SCI_sendString("V=");
+    SCI_sendUint(voltage_x100);
+    SCI_sendString(",I=");
+    SCI_sendUint(current_x100);
+    SCI_sendString(",FAULT=");
+    SCI_sendUint(fault);
+    SCI_sendString("\r\n");
+}
+
+void SCI_sendString(const char *str)
+{
+    uint16_t i = 0;
+    while(str[i] != '\0')
+    {
+        SCI_writeCharBlockingFIFO(mySCI0_BASE, str[i]);
+        i++;
+    }
+}
+
+void SCI_sendUint(uint16_t value)
+{
+    char buffer[6];
+    uint16_t i = 0, j;
+    if(value == 0) { SCI_writeCharBlockingFIFO(mySCI0_BASE, '0'); return; }
+    while(value > 0) { buffer[i++] = (value % 10) + '0'; value /= 10; }
+    for(j = 0; j < i; j++) SCI_writeCharBlockingFIFO(mySCI0_BASE, buffer[i - j - 1]);
+}
