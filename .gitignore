@@ -1,0 +1,11 @@
+*.obj
+*.out
+*.map
+*.d
+
+.clangd/
+
+.settings/
+
+CPU1_FLASH/
+CPU1_RAM/
