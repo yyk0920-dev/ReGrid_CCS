@@ -32,6 +32,7 @@ uint16_t classifyFault(uint16_t voltage_x100, uint16_t current_x100);
 void sendReGridData(uint16_t voltage_x100, uint16_t current_x100, uint16_t fault);
 void SCI_sendString(const char *str);
 void SCI_sendUint(uint16_t value);
+void SCI_sendFaultString(uint16_t fault);
 
 // ==================================================
 // Main
@@ -146,7 +147,7 @@ void sendReGridData(uint16_t voltage_x100, uint16_t current_x100, uint16_t fault
     SCI_sendString(",I=");
     SCI_sendUint(current_x100);
     SCI_sendString(",FAULT=");
-    SCI_sendUint(fault);
+    SCI_sendFaultString(fault);
     SCI_sendString("\r\n");
 }
 
