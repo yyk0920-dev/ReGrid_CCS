@@ -168,3 +168,33 @@ void SCI_sendUint(uint16_t value)
     while(value > 0) { buffer[i++] = (value % 10) + '0'; value /= 10; }
     for(j = 0; j < i; j++) SCI_writeCharBlockingFIFO(mySCI0_BASE, buffer[i - j - 1]);
 }
+
+void SCI_sendFaultString(uint16_t fault)
+{
+    switch(fault)
+    {
+        case FAULT_NORMAL:
+            SCI_sendString("NORMAL");
+            break;
+
+        case FAULT_UNDERVOLTAGE:
+            SCI_sendString("UNDERVOLTAGE");
+            break;
+
+        case FAULT_OVERLOAD:
+            SCI_sendString("OVERLOAD");
+            break;
+
+        case FAULT_DISCONNECT:
+            SCI_sendString("DISCONNECT");
+            break;
+
+        case FAULT_OVERVOLTAGE:
+            SCI_sendString("OVERVOLTAGE");
+            break;
+
+        default:
+            SCI_sendString("UNKNOWN");
+            break;
+    }
+}
